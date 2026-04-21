@@ -162,7 +162,11 @@ for workflow in \
         exit 1
     fi
 
-    [ -d "$dst" ] && mv "$dst" "$old_dst"
+    if [ -d "$dst" ] && ! mv "$dst" "$old_dst"; then
+        rm -rf "$tmp_dst"
+        red "  Failed to move existing $workflow aside — install aborted, no changes made"
+        exit 1
+    fi
 
     if mv "$tmp_dst" "$dst"; then
         rm -rf "$old_dst"
