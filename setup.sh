@@ -77,6 +77,16 @@ for workflow in \
     src="$SCRIPT_DIR/workflows/$workflow"
     dst="$SERVICES_DIR/$workflow"
     if [ -d "$src" ]; then
+        # Validate plists before installing
+        for plist in "$src/Contents/document.wflow" "$src/Contents/Info.plist"; do
+            if [ -f "$plist" ]; then
+                if ! plutil -lint "$plist" > /dev/null 2>&1; then
+                    red "  INVALID plist: $plist — aborting install of $workflow"
+                    red "  Run: plutil -lint \"$plist\" for details"
+                    exit 1
+                fi
+            fi
+        done
         rm -rf "$dst"
         cp -r "$src" "$dst"
         green "  $workflow ✓"

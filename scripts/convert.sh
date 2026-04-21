@@ -79,6 +79,14 @@ for input in "$@"; do
         dir=$(dirname "$input")
         stem=$(basename "${input%.*}")
         output="$dir/$stem.md"
+
+        # Avoid silently overwriting an existing .md file
+        if [ -f "$output" ]; then
+            backup="${output%.md}.bak.md"
+            log "WARN: $output exists — backing up to $backup"
+            mv "$output" "$backup"
+        fi
+
         log "Converting file: $input → $output"
 
         if "$MARKITDOWN" "$input" -o "$output" 2>>"$LOG"; then
@@ -104,4 +112,5 @@ if [ "$fail" -eq 0 ]; then
     fi
 else
     notify "$success converted, $fail failed — see ~/Library/Logs/markitdown-automator.log"
+    exit 1
 fi
