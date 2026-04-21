@@ -26,13 +26,27 @@ is_url() {
     [[ "$1" =~ ^https?:// ]]
 }
 
-# Derive a safe filename from a URL (uses domain + path slug + timestamp)
+# Derive a safe filename from a URL. Accepts a sequence number to avoid
+# collisions when the same URL is converted multiple times in one run.
 url_to_filename() {
     local url="$1"
-    # Strip scheme, replace non-alphanumeric runs with dashes, truncate
+    local seq="$2"
     local slug
     slug=$(echo "$url" | sed 's|https\?://||' | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-80)
-    echo "${slug}-$(date '+%Y%m%d-%H%M%S').md"
+    echo "${slug}-$(date '+%Y%m%d-%H%M%S')-${seq}.md"
+}
+
+# Return a unique backup path that does not already exist.
+unique_backup() {
+    local base="$1"          # e.g. /some/path/report.md
+    local stem="${base%.md}"
+    local candidate="${stem}.bak.md"
+    local i=1
+    while [ -f "$candidate" ]; do
+        candidate="${stem}.bak${i}.md"
+        ((i++)) || true
+    done
+    echo "$candidate"
 }
 
 # ── locate markitdown ─────────────────────────────────────────────────────────
@@ -59,43 +73,54 @@ fi
 
 success=0
 fail=0
+url_seq=0
 
 for input in "$@"; do
     if is_url "$input"; then
         # URL → save to ~/Downloads/
-        filename=$(url_to_filename "$input")
+        ((url_seq++)) || true
+        filename=$(url_to_filename "$input" "$url_seq")
         output="$HOME/Downloads/$filename"
         log "Converting URL: $input → $output"
 
-        if "$MARKITDOWN" "$input" -o "$output" 2>>"$LOG"; then
+        tmp=$(mktemp "$HOME/Downloads/.markitdown-tmp.XXXXXX.md")
+        if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
+            mv "$tmp" "$output"
             log "OK: $output"
             ((success++)) || true
         else
+            rm -f "$tmp"
             log "FAILED URL: $input"
             ((fail++)) || true
         fi
+
     elif [ -f "$input" ]; then
-        # File → save alongside original
+        # File → save alongside original; derive stem safely via basename first
+        base=$(basename "$input")
+        stem="${base%.*}"
         dir=$(dirname "$input")
-        stem=$(basename "${input%.*}")
         output="$dir/$stem.md"
 
-        # Avoid silently overwriting an existing .md file
-        if [ -f "$output" ]; then
-            backup="${output%.md}.bak.md"
-            log "WARN: $output exists — backing up to $backup"
-            mv "$output" "$backup"
-        fi
-
+        # Convert to a temp file first; move into place only on success
+        tmp=$(mktemp "$dir/.markitdown-tmp.XXXXXX.md")
         log "Converting file: $input → $output"
 
-        if "$MARKITDOWN" "$input" -o "$output" 2>>"$LOG"; then
+        if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
+            # Backup any existing output only after we know conversion succeeded
+            if [ -f "$output" ]; then
+                backup=$(unique_backup "$output")
+                log "WARN: $output exists — backing up to $backup"
+                mv "$output" "$backup"
+            fi
+            mv "$tmp" "$output"
             log "OK: $output"
             ((success++)) || true
         else
+            rm -f "$tmp"
             log "FAILED: $input"
             ((fail++)) || true
         fi
+
     else
         log "SKIP (not a file or URL): $input"
         ((fail++)) || true

@@ -49,10 +49,13 @@ else
 fi
 
 # ── 3. Install markitdown ─────────────────────────────────────────────────────
-step "Installing markitdown[all] (this may take a minute)"
+# To pin a specific version, change to e.g. 'markitdown[all]==0.1.1'
+MARKITDOWN_PKG="markitdown[all]"
+
+step "Installing $MARKITDOWN_PKG (this may take a minute)"
 
 "$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --upgrade 'markitdown[all]'
+"$VENV/bin/pip" install --upgrade "$MARKITDOWN_PKG"
 green "  markitdown installed ✓"
 
 MARKITDOWN_VERSION=$("$VENV/bin/markitdown" --version 2>/dev/null || echo "unknown")
