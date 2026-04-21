@@ -18,7 +18,6 @@
 			<string>runWorkflowAsService</string>
 			<key>NSSendTypes</key>
 			<array>
-				<string>NSURLPboardType</string>
 				<string>public.url</string>
 			</array>
 		</dict>

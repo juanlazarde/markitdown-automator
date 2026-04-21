@@ -63,8 +63,9 @@ if [ ! -f "$SCRIPT" ]; then
     osascript -e 'display notification "convert.sh not found. Please run setup.sh." with title "MarkItDown Error"'
     exit 1
 fi
-# URLs arrive via stdin, one per line
-while IFS= read -r url; do
+# URLs arrive via stdin, one per line.
+# -t 30: timeout so we don't hang if Automator never closes stdin.
+while IFS= read -r -t 30 url || [ -n "$url" ]; do
     if [ -n "$url" ]; then
         bash "$SCRIPT" "$url"
     fi

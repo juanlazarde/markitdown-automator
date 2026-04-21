@@ -12,6 +12,19 @@ VENV="$HOME/.markitdown-venv"
 LOG="$HOME/Library/Logs/markitdown-automator.log"
 mkdir -p "$(dirname "$LOG")"
 
+# ── temp-file tracking and cleanup ───────────────────────────────────────────
+# Trap ensures temp files are removed even if the script is killed mid-run.
+
+_tmpfiles=()
+
+cleanup() {
+    local f
+    for f in "${_tmpfiles[@]+"${_tmpfiles[@]}"}"; do
+        rm -f "$f" 2>/dev/null || true
+    done
+}
+trap cleanup EXIT INT TERM
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 notify() {
@@ -26,19 +39,26 @@ is_url() {
     [[ "$1" =~ ^https?:// ]]
 }
 
-# Derive a safe filename from a URL. Accepts a sequence number to avoid
-# collisions when the same URL is converted multiple times in one run.
+# Move src → dst; falls back to cp+rm when src and dst are on different devices.
+safe_mv() {
+    local src="$1" dst="$2"
+    if ! mv "$src" "$dst" 2>/dev/null; then
+        cp "$src" "$dst" && rm -f "$src"
+    fi
+}
+
+# Derive a safe filename from a URL. seq avoids collisions within one run.
 url_to_filename() {
-    local url="$1"
-    local seq="$2"
+    local url="$1" seq="$2"
     local slug
-    slug=$(echo "$url" | sed 's|https\?://||' | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-80)
-    echo "${slug}-$(date '+%Y%m%d-%H%M%S')-${seq}.md"
+    # -E for extended regex so https? works correctly on BSD sed (macOS)
+    slug=$(printf '%s' "$url" | sed -E 's|https?://||' | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-80)
+    printf '%s-%s-%s.md\n' "$slug" "$(date '+%Y%m%d-%H%M%S')" "$seq"
 }
 
 # Return a unique backup path that does not already exist.
 unique_backup() {
-    local base="$1"          # e.g. /some/path/report.md
+    local base="$1"
     local stem="${base%.md}"
     local candidate="${stem}.bak.md"
     local i=1
@@ -46,7 +66,7 @@ unique_backup() {
         candidate="${stem}.bak${i}.md"
         ((i++)) || true
     done
-    echo "$candidate"
+    printf '%s\n' "$candidate"
 }
 
 # ── locate markitdown ─────────────────────────────────────────────────────────
@@ -67,7 +87,7 @@ fi
 # ── convert inputs ────────────────────────────────────────────────────────────
 
 if [ "$#" -eq 0 ]; then
-    echo "Usage: convert.sh file-or-url [file-or-url ...]" >&2
+    printf 'Usage: convert.sh file-or-url [file-or-url ...]\n' >&2
     exit 1
 fi
 
@@ -81,42 +101,46 @@ for input in "$@"; do
         ((url_seq++)) || true
         filename=$(url_to_filename "$input" "$url_seq")
         output="$HOME/Downloads/$filename"
+
+        # mktemp template must end in X's (BSD mktemp requirement)
+        tmp=$(mktemp "$HOME/Downloads/.markitdown-tmp-XXXXXX")
+        _tmpfiles+=("$tmp")
         log "Converting URL: $input → $output"
 
-        tmp=$(mktemp "$HOME/Downloads/.markitdown-tmp.XXXXXX.md")
         if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
-            mv "$tmp" "$output"
+            safe_mv "$tmp" "$output"
             log "OK: $output"
             ((success++)) || true
         else
-            rm -f "$tmp"
             log "FAILED URL: $input"
             ((fail++)) || true
         fi
 
     elif [ -f "$input" ]; then
-        # File → save alongside original; derive stem safely via basename first
+        # File → save alongside original
         base=$(basename "$input")
         stem="${base%.*}"
+        # Dot-files (e.g. .hidden) produce an empty stem — fall back to full name
+        [ -z "$stem" ] && stem="$base"
         dir=$(dirname "$input")
         output="$dir/$stem.md"
 
-        # Convert to a temp file first; move into place only on success
-        tmp=$(mktemp "$dir/.markitdown-tmp.XXXXXX.md")
+        # mktemp template must end in X's (BSD mktemp requirement)
+        tmp=$(mktemp "$dir/.markitdown-tmp-XXXXXX")
+        _tmpfiles+=("$tmp")
         log "Converting file: $input → $output"
 
         if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
-            # Backup any existing output only after we know conversion succeeded
+            # Backup existing output only after conversion succeeds
             if [ -f "$output" ]; then
                 backup=$(unique_backup "$output")
                 log "WARN: $output exists — backing up to $backup"
-                mv "$output" "$backup"
+                safe_mv "$output" "$backup"
             fi
-            mv "$tmp" "$output"
+            safe_mv "$tmp" "$output"
             log "OK: $output"
             ((success++)) || true
         else
-            rm -f "$tmp"
             log "FAILED: $input"
             ((fail++)) || true
         fi
