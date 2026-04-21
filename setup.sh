@@ -148,17 +148,32 @@ for workflow in \
         fi
     done
 
-    # Atomic install: copy to a temp sibling, then swap.
-    # If copy fails, the existing installed workflow is untouched.
+    # Fully atomic install:
+    #   1. Copy src → tmp (if this fails, dst is untouched)
+    #   2. Move dst → old backup (dst is now gone, but old is safe)
+    #   3. Move tmp → dst (if this fails, restore old from backup)
+    #   4. Delete old backup
     tmp_dst="${SERVICES_DIR}/.markitdown-${workflow}.tmp.$$"
+    old_dst="${SERVICES_DIR}/.markitdown-${workflow}.old.$$"
+
     if ! cp -r "$src" "$tmp_dst"; then
         rm -rf "$tmp_dst"
         red "  Failed to copy $workflow — existing install unchanged"
         exit 1
     fi
-    rm -rf "$dst"
-    mv "$tmp_dst" "$dst"
-    green "  $workflow ✓"
+
+    [ -d "$dst" ] && mv "$dst" "$old_dst"
+
+    if mv "$tmp_dst" "$dst"; then
+        rm -rf "$old_dst"
+        green "  $workflow ✓"
+    else
+        rm -rf "$tmp_dst"
+        # Restore previous install so we don't leave the user with nothing
+        [ -d "$old_dst" ] && mv "$old_dst" "$dst"
+        red "  Failed to install $workflow — previous install restored"
+        exit 1
+    fi
 
 done
 

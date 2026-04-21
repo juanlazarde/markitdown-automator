@@ -19,6 +19,7 @@
 			<key>NSSendTypes</key>
 			<array>
 				<string>public.url</string>
+				<string>NSURLPboardType</string>
 			</array>
 		</dict>
 	</array>

@@ -23,7 +23,12 @@ cleanup() {
         rm -f "$f" 2>/dev/null || true
     done
 }
-trap cleanup EXIT INT TERM
+# EXIT trap runs cleanup on normal exit AND after the INT/TERM handlers below.
+trap cleanup EXIT
+# Re-raise the signal after cleanup so the parent sees the correct exit code
+# (130 for SIGINT, 143 for SIGTERM) rather than 0 or a misleading non-zero.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ── output-path collision tracking ───────────────────────────────────────────
 # Prevents two inputs that map to the same stem (e.g. "report" and "report.txt"
@@ -91,7 +96,7 @@ unique_backup() {
 
 # ── locate markitdown ─────────────────────────────────────────────────────────
 
-if [ -f "$VENV/bin/markitdown" ]; then
+if [ -x "$VENV/bin/markitdown" ]; then
     MARKITDOWN="$VENV/bin/markitdown"
 else
     MARKITDOWN=$(command -v markitdown 2>/dev/null || true)
@@ -143,7 +148,12 @@ for input in "$@"; do
         log "Converting URL: $input → $output"
 
         if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
-            mv "$tmp" "$output"
+            if ! mv "$tmp" "$output" 2>>"$LOG"; then
+                log "ERROR: mv failed placing URL output at $output"
+                notify "File placement failed for $(basename "$output") — check logs"
+                ((fail++)) || true
+                continue
+            fi
             record_output "$output"
             log "OK: $output"
             ((success++)) || true
@@ -192,9 +202,19 @@ for input in "$@"; do
             if [ -f "$output" ]; then
                 backup=$(unique_backup "$output")
                 log "WARN: $output exists — backing up to $backup"
-                mv "$output" "$backup"
+                if ! mv "$output" "$backup" 2>>"$LOG"; then
+                    log "ERROR: mv failed backing up $output to $backup"
+                    notify "Backup failed for $(basename "$output") — file was not modified"
+                    ((fail++)) || true
+                    continue
+                fi
             fi
-            mv "$tmp" "$output"
+            if ! mv "$tmp" "$output" 2>>"$LOG"; then
+                log "ERROR: mv failed placing output at $output"
+                notify "File placement failed for $(basename "$output") — check logs"
+                ((fail++)) || true
+                continue
+            fi
             record_output "$output"
             log "OK: $output"
             ((success++)) || true
