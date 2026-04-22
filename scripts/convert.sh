@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # markitdown-automator: convert.sh
 # Converts files OR URLs to Markdown using markitdown.
-#   File usage: convert.sh file1 [file2 ...]   → .md saved alongside each file
+#   File usage: convert.sh [--llm [auto|openai|anthropic]] file1 [file2 ...]
 #   URL usage:  convert.sh https://...          → .md saved to ~/Downloads/
+#
+# Three-tier pipeline for image-heavy files (PDF, JPEG, PNG, GIF, etc.):
+#   Tier 1 (always):   markitdown — fast, handles text-based files
+#   Tier 2 (auto):     Apple Vision OCR — triggers when Tier 1 output is blank
+#   Tier 3 (--llm):    LLM vision API — triggered explicitly via --llm flag
 
 set -euo pipefail
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 
 VENV="$HOME/.markitdown-venv"
+INSTALL_DIR="$HOME/.markitdown-automator"
 LOG="$HOME/Library/Logs/markitdown-automator.log"
 mkdir -p "$(dirname "$LOG")"
 
@@ -47,6 +53,116 @@ record_output() {
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+# Retrieve an API key from macOS Keychain; returns empty string if not set
+get_keychain_key() {
+    security find-generic-password -s "$1" -a api-key -w 2>/dev/null || true
+}
+
+# Resolve which LLM provider to use for a given mode (auto|openai|anthropic).
+# On success sets RESOLVED_PROVIDER and RESOLVED_KEY, returns 0.
+# On failure (no key available) returns 1.
+resolve_llm_provider() {
+    local mode="$1"
+    local openai_key anthropic_key preferred
+
+    openai_key=$(get_keychain_key "markitdown-openai")
+    anthropic_key=$(get_keychain_key "markitdown-anthropic")
+
+    preferred=""
+    if [ -f "$INSTALL_DIR/config" ]; then
+        preferred=$(grep -m1 '^PREFERRED_LLM_PROVIDER=' "$INSTALL_DIR/config" \
+            | cut -d= -f2 | tr -d '[:space:]')
+    fi
+
+    case "$mode" in
+        openai)
+            if [ -n "$openai_key" ]; then
+                RESOLVED_PROVIDER="openai"; RESOLVED_KEY="$openai_key"; return 0
+            fi
+            ;;
+        anthropic)
+            if [ -n "$anthropic_key" ]; then
+                RESOLVED_PROVIDER="anthropic"; RESOLVED_KEY="$anthropic_key"; return 0
+            fi
+            ;;
+        auto)
+            if [ "$preferred" = "openai" ] && [ -n "$openai_key" ]; then
+                RESOLVED_PROVIDER="openai"; RESOLVED_KEY="$openai_key"; return 0
+            elif [ "$preferred" = "anthropic" ] && [ -n "$anthropic_key" ]; then
+                RESOLVED_PROVIDER="anthropic"; RESOLVED_KEY="$anthropic_key"; return 0
+            elif [ -n "$openai_key" ]; then
+                RESOLVED_PROVIDER="openai"; RESOLVED_KEY="$openai_key"; return 0
+            elif [ -n "$anthropic_key" ]; then
+                RESOLVED_PROVIDER="anthropic"; RESOLVED_KEY="$anthropic_key"; return 0
+            fi
+            ;;
+    esac
+    RESOLVED_PROVIDER=""; RESOLVED_KEY=""
+    return 1
+}
+
+# Returns 0 (true) if a file is blank or contains < 50 non-whitespace characters.
+# Used to decide whether to trigger Tier 2 Vision OCR after Tier 1 markitdown.
+is_blank_output() {
+    local f="$1"
+    [ ! -s "$f" ] && return 0
+    local count
+    count=$(awk '{gsub(/[[:space:]]/, ""); sum += length($0)} END {print sum+0}' "$f")
+    [ "$count" -lt 50 ]
+}
+
+# Run Apple Vision OCR (Tier 2) on a file, writing recognized text to $2.
+# Supports: PDF, JPEG, PNG, GIF (first frame), TIFF, HEIC, WebP, BMP.
+run_vision_ocr() {
+    local input="$1" output="$2"
+    local ocr_bin="$INSTALL_DIR/scripts/vision_ocr"
+
+    if [ ! -x "$ocr_bin" ]; then
+        log "WARN: vision_ocr binary not found at $ocr_bin — Tier 2 unavailable (run setup.sh)"
+        return 1
+    fi
+
+    log "Tier 2: Vision OCR → $input"
+    if "$ocr_bin" "$input" > "$output" 2>>"$LOG"; then
+        return 0
+    else
+        log "WARN: Vision OCR failed for $input"
+        return 1
+    fi
+}
+
+# Run LLM vision conversion (Tier 3) on a file, writing markdown to $2.
+# Reads provider and key from macOS Keychain via resolve_llm_provider().
+run_llm_convert() {
+    local input="$1" output="$2"
+    local llm_script="$INSTALL_DIR/scripts/llm_convert.py"
+
+    if [ ! -f "$llm_script" ]; then
+        log "ERROR: llm_convert.py not found — run setup.sh to reinstall"
+        notify "AI conversion script missing — run setup.sh"
+        return 1
+    fi
+
+    RESOLVED_PROVIDER=""; RESOLVED_KEY=""
+    if ! resolve_llm_provider "${LLM_MODE:-auto}"; then
+        log "WARN: No LLM API key configured (mode=${LLM_MODE:-auto})"
+        notify "No AI API key configured — run: bash setup.sh --configure-keys"
+        return 1
+    fi
+
+    log "Tier 3: LLM ($RESOLVED_PROVIDER) → $input"
+    if "$VENV/bin/python" "$llm_script" \
+            --provider "$RESOLVED_PROVIDER" \
+            --api-key  "$RESOLVED_KEY" \
+            "$input" "$output" \
+            2>>"$LOG"; then
+        return 0
+    else
+        log "WARN: LLM conversion failed for $input (provider=$RESOLVED_PROVIDER)"
+        return 1
+    fi
+}
 
 notify() {
     # Pass message as AppleScript argv — avoids any string-injection risk
@@ -109,10 +225,30 @@ if [ -z "$MARKITDOWN" ]; then
     exit 1
 fi
 
+# ── parse --llm flag ──────────────────────────────────────────────────────────
+# Optional: --llm [auto|openai|anthropic]
+#   Skips blank-detection and goes straight to Tier 3 LLM conversion.
+#   Must appear before any file/URL arguments.
+
+LLM_MODE=""
+if [ "${1:-}" = "--llm" ]; then
+    shift
+    case "${1:-}" in
+        auto|openai|anthropic)
+            LLM_MODE="$1"; shift ;;
+        -*)
+            # Next arg is another flag, treat mode as "auto"
+            LLM_MODE="auto" ;;
+        *)
+            # No valid mode given — default to "auto"; leave $1 as the file argument
+            LLM_MODE="auto" ;;
+    esac
+fi
+
 # ── convert inputs ────────────────────────────────────────────────────────────
 
 if [ "$#" -eq 0 ]; then
-    printf 'Usage: convert.sh file-or-url [file-or-url ...]\n' >&2
+    printf 'Usage: convert.sh [--llm [auto|openai|anthropic]] file-or-url [file-or-url ...]\n' >&2
     exit 1
 fi
 
@@ -197,6 +333,25 @@ for input in "$@"; do
         log "Converting file: $input → $output"
 
         if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
+
+            # ── Tier 3: LLM (when explicitly requested via --llm flag) ────────
+            # Overrides the Tier 1 output entirely; blank-detection is skipped.
+            if [ -n "$LLM_MODE" ]; then
+                if ! run_llm_convert "$input" "$tmp"; then
+                    log "FAILED (LLM Tier 3): $input"
+                    ((fail++)) || true
+                    continue
+                fi
+
+            # ── Tier 2: Vision OCR (auto, when Tier 1 output is blank) ───────
+            # Applies to PDFs, images, and any file markitdown can't extract
+            # text from. A blank .md is placed (not a failure) if OCR also fails.
+            elif is_blank_output "$tmp"; then
+                log "Tier 1 output blank for $input — trying Tier 2 Vision OCR"
+                run_vision_ocr "$input" "$tmp" || log "WARN: Tier 2 failed — output may be blank"
+            fi
+
+            # ── Place output (backup existing, then mv temp into place) ───────
             # Backup any pre-existing output only after conversion succeeds,
             # so a failed conversion never destroys the user's existing file.
             if [ -f "$output" ]; then

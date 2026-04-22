@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # markitdown-automator: setup.sh
 # One-time installer. Run once; re-run to update.
-# Usage: bash setup.sh [--uninstall]
+# Usage: bash setup.sh [--uninstall | --configure-keys]
 
 set -euo pipefail
 
@@ -21,6 +21,100 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
+# ── AI key configuration (shared by --configure-keys and full install) ────────
+_configure_keys_interactive() {
+    echo ""
+    echo "  MarkItDown Automator — Configure AI Keys"
+    echo "  ════════════════════════════════════════"
+    echo ""
+    echo "  API keys are stored in macOS Keychain (never in files on disk)."
+    echo "  Press ENTER to skip any provider."
+    echo ""
+
+    local openai_key="" anthropic_key=""
+
+    # OpenAI
+    printf '  OpenAI API key (sk-...): '
+    IFS= read -rs openai_key; printf '\n'
+    if [ -n "$openai_key" ]; then
+        if security add-generic-password \
+                -s markitdown-openai -a api-key -U \
+                -w "$openai_key" 2>/dev/null; then
+            green "  OpenAI key stored in Keychain ✓"
+        else
+            red "  Failed to store OpenAI key in Keychain"
+        fi
+    else
+        yellow "  OpenAI skipped"
+    fi
+
+    # Anthropic
+    printf '  Anthropic API key (sk-ant-...): '
+    IFS= read -rs anthropic_key; printf '\n'
+    if [ -n "$anthropic_key" ]; then
+        if security add-generic-password \
+                -s markitdown-anthropic -a api-key -U \
+                -w "$anthropic_key" 2>/dev/null; then
+            green "  Anthropic key stored in Keychain ✓"
+        else
+            red "  Failed to store Anthropic key in Keychain"
+        fi
+    else
+        yellow "  Anthropic skipped"
+    fi
+
+    # Install Python packages for configured providers
+    if [ -x "$VENV/bin/pip" ]; then
+        local packages_to_install=""
+        local _ok_key _ant_key
+        _ok_key=$(security find-generic-password -s markitdown-openai -a api-key -w 2>/dev/null || true)
+        _ant_key=$(security find-generic-password -s markitdown-anthropic -a api-key -w 2>/dev/null || true)
+
+        # pymupdf + Pillow needed for both (PDF rendering; Pillow for GIF/TIFF/BMP/HEIC→PNG)
+        [ -n "$_ok_key" ] || [ -n "$_ant_key" ] && packages_to_install="pymupdf Pillow"
+        [ -n "$_ok_key" ] && packages_to_install="$packages_to_install openai"
+        [ -n "$_ant_key" ] && packages_to_install="$packages_to_install anthropic"
+
+        if [ -n "$packages_to_install" ]; then
+            step "Installing Python packages for AI providers"
+            # shellcheck disable=SC2086
+            "$VENV/bin/pip" install --quiet --upgrade $packages_to_install
+            green "  Packages installed ✓"
+        fi
+    else
+        yellow "  Python venv not found — run 'bash setup.sh' first, then re-run --configure-keys"
+    fi
+
+    # Preferred provider (only asked if both are configured)
+    local _ok2 _ant2
+    _ok2=$(security find-generic-password -s markitdown-openai -a api-key -w 2>/dev/null || true)
+    _ant2=$(security find-generic-password -s markitdown-anthropic -a api-key -w 2>/dev/null || true)
+
+    if [ -n "$_ok2" ] && [ -n "$_ant2" ]; then
+        echo ""
+        printf '  Preferred provider when both are configured [openai/anthropic] (default: openai): '
+        local preferred=""
+        IFS= read -r preferred
+        preferred=$(printf '%s' "$preferred" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$preferred" = "anthropic" ] || preferred="openai"
+
+        mkdir -p "$INSTALL_DIR"
+        printf 'PREFERRED_LLM_PROVIDER=%s\n' "$preferred" > "$INSTALL_DIR/config"
+        green "  Preferred provider: $preferred ✓"
+    fi
+
+    echo ""
+    green "  Key configuration complete."
+    echo "  Test with: bash ~/.markitdown-automator/scripts/convert.sh --llm /path/to/file.pdf"
+    echo ""
+}
+
+# ── configure-keys mode ───────────────────────────────────────────────────────
+if [ "${1:-}" = "--configure-keys" ]; then
+    _configure_keys_interactive
+    exit 0
+fi
+
 # ── uninstall mode ────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--uninstall" ]; then
     echo ""
@@ -31,7 +125,22 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -rf "$VENV"        && green "  Removed $VENV ✓"
     rm -rf "$SERVICES_DIR/Convert to Markdown.workflow" \
            "$SERVICES_DIR/Convert URL to Markdown.workflow" \
+           "$SERVICES_DIR/Convert to Markdown (AI).workflow" \
         && green "  Removed Quick Actions ✓"
+
+    printf '  Remove AI API keys from Keychain? [y/N]: '
+    IFS= read -r _remove_keys
+    case "$_remove_keys" in
+        [yY]|[yY][eE][sS])
+            security delete-generic-password -s markitdown-openai    -a api-key 2>/dev/null || true
+            security delete-generic-password -s markitdown-anthropic -a api-key 2>/dev/null || true
+            green "  Keychain entries removed ✓"
+            ;;
+        *)
+            yellow "  Keychain entries kept"
+            ;;
+    esac
+
     if /System/Library/CoreServices/pbs -update 2>/dev/null; then
         green "  Services menu refreshed ✓"
     else
@@ -118,6 +227,36 @@ cp "$SCRIPT_DIR/scripts/convert.sh" "$INSTALL_DIR/scripts/convert.sh"
 chmod +x "$INSTALL_DIR/scripts/convert.sh"
 green "  convert.sh installed ✓"
 
+if [ -f "$SCRIPT_DIR/scripts/llm_convert.py" ]; then
+    cp "$SCRIPT_DIR/scripts/llm_convert.py" "$INSTALL_DIR/scripts/llm_convert.py"
+    chmod +x "$INSTALL_DIR/scripts/llm_convert.py"
+    green "  llm_convert.py installed ✓"
+fi
+
+# ── 4b. Compile Vision OCR binary ─────────────────────────────────────────────
+# Requires macOS 11+ for VNRecognizeTextRequest .accurate level.
+# Compilation failure is non-fatal — Tier 2 is simply unavailable.
+
+if [ -f "$SCRIPT_DIR/scripts/vision_ocr.swift" ]; then
+    OS_MAJOR=$(sw_vers -productVersion | cut -d. -f1)
+    if [ "$OS_MAJOR" -lt 11 ]; then
+        yellow "  macOS 11+ required for Vision OCR — skipping Tier 2 (Tier 1 and 3 still work)"
+    else
+        step "Compiling Vision OCR binary (Tier 2)"
+        if swiftc -O \
+                -sdk "$(xcrun --show-sdk-path 2>/dev/null)" \
+                "$SCRIPT_DIR/scripts/vision_ocr.swift" \
+                -o "$INSTALL_DIR/scripts/vision_ocr" \
+                2>/dev/null; then
+            chmod +x "$INSTALL_DIR/scripts/vision_ocr"
+            green "  vision_ocr compiled ✓"
+        else
+            yellow "  vision_ocr compilation failed — Tier 2 OCR unavailable"
+            yellow "  Check Xcode Command Line Tools: xcode-select --install"
+        fi
+    fi
+fi
+
 # ── 5. Install Quick Actions ──────────────────────────────────────────────────
 step "Installing Quick Actions to ~/Library/Services/"
 
@@ -125,7 +264,8 @@ mkdir -p "$SERVICES_DIR"
 
 for workflow in \
     "Convert to Markdown.workflow" \
-    "Convert URL to Markdown.workflow"; do
+    "Convert URL to Markdown.workflow" \
+    "Convert to Markdown (AI).workflow"; do
 
     src="$SCRIPT_DIR/workflows/$workflow"
     dst="$SERVICES_DIR/$workflow"
@@ -181,7 +321,23 @@ for workflow in \
 
 done
 
-# ── 6. Reload Services menu ───────────────────────────────────────────────────
+# ── 6. Optional AI provider setup ────────────────────────────────────────────
+echo ""
+echo "  ── Optional: AI-powered conversion (Tier 3) ──────────────────────────"
+echo "  Tier 3 uses OpenAI or Anthropic vision to convert image-only files."
+echo "  API keys are stored securely in macOS Keychain."
+printf '  Configure AI keys now? [y/N]: '
+IFS= read -r _setup_ai
+case "$_setup_ai" in
+    [yY]|[yY][eE][sS])
+        _configure_keys_interactive
+        ;;
+    *)
+        yellow "  Skipped — run 'bash setup.sh --configure-keys' at any time to configure"
+        ;;
+esac
+
+# ── 7. Reload Services menu ───────────────────────────────────────────────────
 step "Reloading macOS Services"
 
 if /System/Library/CoreServices/pbs -update 2>/dev/null; then
@@ -199,13 +355,17 @@ echo "  File conversion:"
 echo "    Right-click file(s) in Finder → Quick Actions → Convert to Markdown"
 echo "    Output: .md saved alongside the original file"
 echo ""
+echo "  AI-powered conversion (image PDFs, scanned docs, photos):"
+echo "    Right-click file(s) in Finder → Quick Actions → Convert to Markdown (AI)"
+echo "    Configure keys: bash setup.sh --configure-keys"
+echo ""
 echo "  URL conversion:"
-echo "    Safari Share button → Convert URL to Markdown"
+echo "    Safari menu bar → Services → Convert URL to Markdown"
 echo "    Output: ~/Downloads/<page>.md"
 echo ""
 echo "  If Quick Actions don't appear immediately, go to:"
 echo "    System Settings → Keyboard → Keyboard Shortcuts → Services"
-echo "    and enable both Convert to Markdown entries"
+echo "    and enable the Convert to Markdown entries"
 echo ""
 echo "  To uninstall: bash setup.sh --uninstall"
 echo "  Logs: ~/Library/Logs/markitdown-automator.log"
