@@ -167,7 +167,7 @@ done</string>
 	<key>workflowMetaData</key>
 	<dict>
 		<key>serviceApplicationBundleID</key>
-		<string>com.apple.safari</string>
+		<string>com.apple.Safari</string>
 		<key>serviceApplicationPath</key>
 		<string>/Applications/Safari.app</string>
 		<key>serviceInputTypeIdentifier</key>

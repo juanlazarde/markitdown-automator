@@ -32,7 +32,7 @@ setup.sh              → one-time installer / uninstaller
 scripts/convert.sh    → core conversion logic (called by both Quick Actions)
 workflows/
   Convert to Markdown.workflow          → Finder right-click Quick Action (files)
-  Convert URL to Markdown.workflow      → Safari Share Sheet Quick Action (URLs)
+  Convert URL to Markdown.workflow      → Safari Services menu Quick Action (URLs)
 ```
 
 **Runtime install locations** (created by `setup.sh`):
@@ -69,13 +69,26 @@ workflows/
 `*.workflow` bundles are plist XML. The key files are `Contents/document.wflow` and `Contents/Info.plist`. When modifying workflows:
 - `workflowTypeIdentifier: com.apple.Automator.servicesMenu` makes it a Quick Action
 - `serviceInputTypeIdentifier: com.apple.Automator.fileSystemObject` = accepts files (Finder)
-- `serviceInputTypeIdentifier: com.apple.Automator.url` = accepts URLs (Safari Share)
+- `serviceInputTypeIdentifier: com.apple.Automator.url` = accepts URLs (Safari Services)
 - `inputMethod: 1` in `ActionParameters` = files passed as shell arguments; `0` = via stdin
 - `Contents/Info.plist` must declare `NSServices` — without it macOS silently ignores the workflow
 - Always run `plutil -lint` after editing any plist; `setup.sh` will refuse to install an invalid bundle
-- Both `public.url` and `NSURLPboardType` are declared in the URL workflow's `Info.plist` for broadest share sheet compatibility
+- Both `public.url` and `NSURLPboardType` are declared in the URL workflow's `Info.plist` for broadest compatibility
+- `serviceApplicationBundleID` must be `com.apple.Safari` (capital S — Safari's actual bundle identifier)
 
 After editing a workflow bundle, re-run `setup.sh` to push the updated version to `~/Library/Services/`.
+
+## Safari Share Sheet vs Services Menu
+
+**Important architectural note**: On macOS Ventura and later, Safari's share sheet (toolbar share button) exclusively uses `com.apple.share-services` App Extensions. Automator Quick Actions / Services do NOT appear in the share sheet — only in the Services menu.
+
+The URL workflow (`Convert URL to Markdown.workflow`) appears in:
+- Safari menu bar → **Services** → Convert URL to Markdown
+- Right-click a page/link → **Services** → Convert URL to Markdown
+
+It does NOT appear in the Safari share sheet toolbar button. This is a macOS architectural constraint, not a bug in the workflow.
+
+To add share sheet support in the future, a native macOS Share Extension (built with Xcode) or a Shortcuts automation would be required.
 
 ## Quick Actions Not Appearing
 
