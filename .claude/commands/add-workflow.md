@@ -11,7 +11,7 @@ Create a new workflow bundle with correct plist structure, validate it, wire it 
 ### 1. Choose the right template
 
 | Input type | Template to copy |
-|---|---|
+| --- | --- |
 | Files (Finder) — Tier 1+2 | `workflows/Convert to Markdown.workflow` |
 | Files (Finder) — Tier 3 LLM | `workflows/Convert to Markdown (AI).workflow` |
 | URLs (Safari Services) | `workflows/Convert URL to Markdown.workflow` |
