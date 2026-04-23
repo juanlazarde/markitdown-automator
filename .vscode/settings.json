@@ -1,0 +1,9 @@
+{
+    "flake8.args": [
+        "--max-line-length=120",
+        // "--ignore=E402,F841,F401,E302,E305,D100,D103",
+    ],
+    "cSpell.words": [
+        "streamlit"
+    ],
+}
