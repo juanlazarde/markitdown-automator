@@ -11,7 +11,7 @@ Right-click supported files in Finder, or open a URL in Safari, and get a `.md` 
 The standard action converts anything `markitdown` supports, including:
 
 | Type | Examples |
-|------|---------|
+| --- | --- |
 | Documents | PDF, DOCX, PPTX, XLSX, EPUB |
 | Web | HTML pages, RSS feeds |
 | Media | Images (with alt-text), audio transcription |
@@ -51,6 +51,7 @@ bash setup.sh --help
 ```
 
 Setup does the following automatically:
+
 1. Checks required macOS tools.
 2. Checks Python 3.10+; if missing or too old, offers to install Homebrew and Python with clear admin-password disclosure.
 3. Creates an isolated Python venv at `~/.markitdown-venv`.
@@ -118,11 +119,12 @@ bash scripts/convert.sh report.docx slides.pptx notes.html
 ## Output locations
 
 | Input | Output |
-|-------|--------|
+| --- | --- |
 | `/path/to/file.pdf` | `/path/to/file.md` (alongside original) |
 | `https://example.com/page` | `~/Downloads/example.com-page-20240101-120000-1.md` |
 
 **Safe-write behaviour:**
+
 - File conversion writes to a temp file first, then moves the temp file into place
 - If `output.md` already exists, it is renamed to `output.bak.md` before the new file is placed
 - Multiple files that share a stem (e.g. `report.pdf` and `report.docx`) produce `report.md` and `report-2.md`
@@ -199,6 +201,7 @@ Or install manually into the venv:
 ### Safari Services menu item missing
 
 After a restart it should appear under **Safari → Services**. If it still doesn't:
+
 1. Open **System Settings → Keyboard → Keyboard Shortcuts → Services**
 2. Scroll to find "Convert URL to Markdown" and enable it
 
@@ -241,7 +244,7 @@ bash setup.sh --help
 
 ## How it works
 
-```
+```text
 Finder / Safari
       │
       ▼
@@ -264,7 +267,7 @@ The `.workflow` bundles are Automator plist XML — no compiled code, fully insp
 
 ## Project structure
 
-```
+```text
 setup.sh                          one-time installer / uninstaller
 scripts/
   convert.sh                      core conversion logic

@@ -3,7 +3,10 @@
 llm_convert.py — Tier 3 LLM vision conversion for markitdown-automator.
 
 Usage:
-    python llm_convert.py --provider [openai|anthropic] --api-key KEY INPUT OUTPUT
+    python llm_convert.py --provider [openai|anthropic] INPUT OUTPUT
+
+API key is read from the MARKITDOWN_API_KEY environment variable (never passed
+on the command line to avoid transient process-listing exposure).
 
 Handles:
     PDF   — pages rendered via pymupdf at 150 DPI, sent one-by-one to vision API
@@ -21,6 +24,15 @@ import io
 import os
 import sys
 from pathlib import Path
+
+# ── Python version guard ──────────────────────────────────────────────────────
+if sys.version_info < (3, 10):
+    print(
+        f"ERROR: Python 3.10+ required, found "
+        f"{sys.version_info.major}.{sys.version_info.minor}",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -205,10 +217,14 @@ def convert_anthropic(api_key: str, image_chunks: list[tuple[bytes, str]], promp
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM vision conversion for markitdown-automator")
     parser.add_argument("--provider", required=True, choices=["openai", "anthropic"])
-    parser.add_argument("--api-key", required=True)
     parser.add_argument("input_path")
     parser.add_argument("output_path")
     args = parser.parse_args()
+
+    api_key = os.environ.get("MARKITDOWN_API_KEY", "")
+    if not api_key:
+        print("ERROR: MARKITDOWN_API_KEY environment variable not set", file=sys.stderr)
+        sys.exit(1)
 
     if not os.path.isfile(args.input_path):
         print(f"ERROR: input file not found: {args.input_path}", file=sys.stderr)
@@ -244,9 +260,9 @@ def main() -> None:
     # Call provider
     try:
         if args.provider == "openai":
-            markdown = convert_openai(args.api_key, image_chunks, prompt)
+            markdown = convert_openai(api_key, image_chunks, prompt)
         else:
-            markdown = convert_anthropic(args.api_key, image_chunks, prompt)
+            markdown = convert_anthropic(api_key, image_chunks, prompt)
     except Exception as e:
         print(f"ERROR: LLM API call failed: {e}", file=sys.stderr)
         sys.exit(1)

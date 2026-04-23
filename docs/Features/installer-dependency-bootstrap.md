@@ -134,7 +134,7 @@ flowchart TD
 - `python3 -m py_compile scripts/llm_convert.py` — pass.
 - `plutil -lint` on all workflow plist files — pass.
 - `bash setup.sh --help` — pass.
-- `bash tests/run_tests.sh --units` — pass, 47 passed.
+- `bash tests/run_tests.sh --units` — pass, 48 passed.
 - `bash tests/run_tests.sh` — pass, 73 passed, 0 failed, 0 skipped.
 
 ---

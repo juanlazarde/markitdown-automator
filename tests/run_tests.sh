@@ -435,6 +435,9 @@ assert "no-args exits non-zero" bash -c 'bash '"$CONVERT"' 2>/dev/null; [ $? -ne
 # Test: directory input counted as failure (exit 1), doesn't crash
 run_convert_failure "directory input exits non-zero" "$TMPDIR_TEST"
 
+# Test: invalid --llm mode must exit non-zero (not silently default to "auto")
+run_convert_failure "invalid --llm mode exits non-zero" --llm invalid_mode /dev/null
+
 # Test: explicit AI conversion fails hard when no key is configured, without
 # invoking Tier 1 or moving the existing output aside.
 #

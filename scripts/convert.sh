@@ -16,7 +16,7 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 VENV="$HOME/.markitdown-venv"
 INSTALL_DIR="$HOME/.markitdown-automator"
 LOG="$HOME/Library/Logs/markitdown-automator.log"
-mkdir -p "$(dirname "$LOG")"
+mkdir -p "$(dirname "$LOG")" || { printf 'ERROR: Cannot create log directory: %s\n' "$(dirname "$LOG")" >&2; exit 1; }
 
 # ── temp-file tracking ────────────────────────────────────────────────────────
 # Registered temp files are removed on EXIT, INT, and TERM so a killed run
@@ -72,7 +72,7 @@ resolve_llm_provider() {
 
     preferred=""
     if [ -f "$INSTALL_DIR/config" ]; then
-        preferred=$(grep -m1 '^PREFERRED_LLM_PROVIDER=' "$INSTALL_DIR/config" \
+        preferred=$(grep -m1 '^PREFERRED_LLM_PROVIDER=\(openai\|anthropic\)$' "$INSTALL_DIR/config" \
             | cut -d= -f2 | tr -d '[:space:]')
     fi
 
@@ -103,14 +103,19 @@ resolve_llm_provider() {
     return 1
 }
 
-# Returns 0 (true) if a file is blank or contains < 50 non-whitespace characters.
+# Number of non-whitespace characters below which Tier 1 output is considered blank.
+# Triggers Tier 2 Vision OCR for supported file types. Update boundary tests in
+# tests/run_tests.sh (the 49/50-char unit tests) if this value ever changes.
+BLANK_THRESHOLD=50
+
+# Returns 0 (true) if a file is blank or contains < BLANK_THRESHOLD non-whitespace chars.
 # Used to decide whether to trigger Tier 2 Vision OCR after Tier 1 markitdown.
 is_blank_output() {
     local f="$1"
     [ ! -s "$f" ] && return 0
     local count
     count=$(awk '{gsub(/[[:space:]]/, ""); sum += length($0)} END {print sum+0}' "$f")
-    [ "$count" -lt 50 ]
+    [ "$count" -lt "$BLANK_THRESHOLD" ]
 }
 
 is_vision_ocr_supported() {
@@ -163,9 +168,8 @@ run_llm_convert() {
     fi
 
     log "Tier 3: LLM ($RESOLVED_PROVIDER) → $input"
-    if "$VENV/bin/python" "$llm_script" \
+    if MARKITDOWN_API_KEY="$RESOLVED_KEY" "$VENV/bin/python" "$llm_script" \
             --provider "$RESOLVED_PROVIDER" \
-            --api-key  "$RESOLVED_KEY" \
             "$input" "$output" \
             2>>"$LOG"; then
         return 0
@@ -258,9 +262,13 @@ if [ "${1:-}" = "--llm" ]; then
         -*)
             # Next arg is another flag, treat mode as "auto"
             LLM_MODE="auto" ;;
-        *)
-            # No valid mode given — default to "auto"; leave $1 as the file argument
+        "")
+            # No mode argument; default to "auto"
             LLM_MODE="auto" ;;
+        *)
+            printf 'ERROR: invalid --llm mode: %s\nValid modes: auto, openai, anthropic\n' "$1" >&2
+            exit 1
+            ;;
     esac
 fi
 

@@ -56,7 +56,7 @@ The AI Finder action is the explicit paid/slow conversion path. It must not depe
 - Reads from: input files, macOS Keychain through `security`, optional installed config.
 - Writes to: temp conversion files first, then final `.md` only after success.
 - Error handling: missing AI key returns a failed item count and leaves output absent.
-- Security: API keys stay in Keychain and are passed only to the installed converter process.
+- Security: API keys stay in Keychain and are passed to the converter process via the `MARKITDOWN_API_KEY` environment variable — never on the command line — to prevent transient exposure through process listing.
 
 ---
 
@@ -92,6 +92,7 @@ flowchart TD
 | ID | Description | Level | Expected result | Data / Notes |
 | --- | --- | --- | --- | --- |
 | NEG-001 | `--llm` with no configured key | Integration | Exit non-zero, no `.md` placed, existing `.md` not backed up | Fake isolated `HOME` and fake `security` command |
+| NEG-002 | `--llm` with invalid mode argument | Unit | Exit non-zero with error message; no conversion attempted | `--llm invalid_mode /dev/null` via `run_convert_failure` helper |
 | POS-001 | Tier 1 fixture conversion | Integration | Exit zero and output file has content | Existing real fixtures |
 | EDGE-001 | Existing output backup | Integration | Exit zero, original output moved to `.bak.md` | Existing real fixture |
 
@@ -103,7 +104,7 @@ flowchart TD
 - `python3 -m py_compile scripts/llm_convert.py` — pass.
 - `plutil -lint` on all workflow plist files — pass.
 - `CLANG_MODULE_CACHE_PATH=/tmp/markitdown-clang-cache swiftc -typecheck scripts/vision_ocr.swift` — pass.
-- `bash tests/run_tests.sh --units` — pass, 44 passed.
+- `bash tests/run_tests.sh --units` — pass, 48 passed.
 - `bash tests/run_tests.sh --tier1` — pass, 23 passed.
 - `bash tests/run_tests.sh` — pass, 70 passed, 0 failed, 0 skipped.
 

@@ -367,7 +367,10 @@ _configure_keys_interactive() {
         if [ -n "$packages_to_install" ]; then
             step "Installing Python packages for AI providers"
             # shellcheck disable=SC2086
-            "$VENV/bin/pip" install --quiet --upgrade $packages_to_install
+            if ! "$VENV/bin/pip" install --upgrade $packages_to_install; then
+                red "  ERROR: pip install failed — check network connection and disk space"
+                exit 1
+            fi
             green "  Packages installed ✓"
         fi
     else
@@ -500,7 +503,7 @@ MARKITDOWN_PKG="markitdown[all]"
 
 step "Installing $MARKITDOWN_PKG (this may take a minute)"
 
-"$VENV/bin/pip" install --quiet --upgrade pip
+"$VENV/bin/pip" install --upgrade pip
 "$VENV/bin/pip" install --upgrade "$MARKITDOWN_PKG"
 green "  markitdown installed ✓"
 
@@ -552,6 +555,17 @@ step "Installing Quick Actions to ~/Library/Services/"
 
 mkdir -p "$SERVICES_DIR"
 
+# Track tmp/old workflow dirs so they are removed if setup is interrupted mid-install.
+_wf_tmpdirs=()
+_wf_cleanup() {
+    local d
+    for d in "${_wf_tmpdirs[@]+"${_wf_tmpdirs[@]}"}";
+    do
+        rm -rf "$d" 2>/dev/null || true
+    done
+}
+trap '_wf_cleanup' EXIT
+
 for workflow in \
     "Convert to Markdown.workflow" \
     "Convert URL to Markdown.workflow" \
@@ -585,6 +599,7 @@ for workflow in \
     #   4. Delete old backup
     tmp_dst="${SERVICES_DIR}/.markitdown-${workflow}.tmp.$$"
     old_dst="${SERVICES_DIR}/.markitdown-${workflow}.old.$$"
+    _wf_tmpdirs+=("$tmp_dst" "$old_dst")
 
     if ! cp -r "$src" "$tmp_dst"; then
         rm -rf "$tmp_dst"

@@ -49,7 +49,7 @@ Once all gates pass, propose a commit message:
 - Do NOT include "Co-Authored-By" — that is added automatically by git commit
 
 Format:
-```
+```text
 <subject line>
 
 <body: what changed and why, wrapped at 72 chars>

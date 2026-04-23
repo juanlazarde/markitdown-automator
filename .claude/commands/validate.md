@@ -40,7 +40,7 @@ grep -rn 'TODO:\|TEMPLATE ONLY\|\.\.\.' docs/ AGENTS.md TASKS.md 2>/dev/null
 List each check with a clear PASS or FAIL line. On failure, include the exact error output and the file:line. Do not summarize failures — show the raw output so the fix is obvious.
 
 Example:
-```
+```text
 PASS  bash -n scripts/convert.sh
 PASS  bash -n setup.sh
 FAIL  plutil -lint workflows/Convert to Markdown.workflow/Contents/Info.plist

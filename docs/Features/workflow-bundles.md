@@ -104,7 +104,7 @@ flowchart TD
 - Extracted `COMMAND_STRING` from each workflow and ran `bash -n` — pass.
 - `bash -n setup.sh && bash -n tests/run_tests.sh && bash -n scripts/convert.sh` — pass.
 - `python3 -m py_compile scripts/llm_convert.py` — pass.
-- `bash tests/run_tests.sh --units` — pass, 44 passed.
+- `bash tests/run_tests.sh --units` — pass, 48 passed.
 - `bash tests/run_tests.sh` — pass, 70 passed, 0 failed, 0 skipped.
 
 ---

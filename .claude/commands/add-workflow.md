@@ -78,7 +78,7 @@ Note: newly installed Quick Actions require a system restart to appear in Finder
 ### 8. Update documentation
 
 **`docs/Architecture.md`** — add to File Layout:
-```
+```text
 workflows/
   $ARGUMENTS.workflow    → description of what it does
 ```

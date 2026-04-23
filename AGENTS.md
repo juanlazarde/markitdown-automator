@@ -200,6 +200,17 @@ Project skills live in `.claude/commands/`. Invoke with `/skill-name`.
 - Exit codes: 0 = success, 1 = runtime error (API failure, bad input), 2 = missing dependency
 - Atomic output writes: write to `output + ".llm-tmp"` then `os.replace(tmp, output)`
 
+**Markdown:**
+
+- Follow [CommonMark](https://commonmark.org/help/) for all `.md` files
+- ATX-style headings (`#` prefix), blank line before and after every heading
+- Fenced code blocks with explicit language tag (` ```bash `, ` ```python `, etc.)
+- Tables: always include a header row and alignment row (`| --- |`); pad columns for readability
+- Ordered lists use `1.` throughout (let renderers handle numbering); unordered lists use `-`
+- One blank line between list items that contain sub-content; no blank lines between simple single-line items
+- No trailing whitespace; single blank line at end of file
+- Inline code (`` ` ``) for command names, flags, paths, and symbol names; full fenced blocks for multi-line samples
+
 ### Critical (NEVER violate)
 
 - Never commit API keys, secrets, or credentials — OpenAI and Anthropic keys live in macOS Keychain only
@@ -283,8 +294,8 @@ TASKS.md                              → backlog
 
 ### convert.sh Key Behaviors
 
-- **`--llm` flag**: `convert.sh --llm [auto|openai|anthropic] file ...` — must precede file args; triggers Tier 3 directly and skips Tier 1/blank-detection for files
-- **Blank detection**: after Tier 1, checks for < 50 non-whitespace chars → triggers Tier 2 automatically only for OCR-supported PDFs/images
+- **`--llm` flag**: `convert.sh --llm [auto|openai|anthropic] file ...` — must precede file args; triggers Tier 3 directly and skips Tier 1/blank-detection for files; invalid mode exits 1 with an error message
+- **Blank detection**: after Tier 1, checks against `BLANK_THRESHOLD` (50 non-whitespace chars, defined as a named constant in `convert.sh`) → triggers Tier 2 automatically only for OCR-supported PDFs/images
 - **Temp-first writes**: converts to `mktemp`, moves into place only on success
 - **Backup on overwrite**: existing `output.md` → `output.bak.md` (then `.bak1.md`, etc.)
 - **In-run collision tracking**: two inputs with the same stem get `report.md` and `report-2.md`

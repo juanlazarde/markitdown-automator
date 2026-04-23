@@ -15,7 +15,7 @@ flowchart TD
     A[User triggers Quick Action or convert.sh] --> B{Input}
     B -->|URL| U[Tier 1: markitdown URL conversion]
     B -->|File, normal action| T1[Tier 1: markitdown file conversion]
-    T1 --> C{Output has fewer than 50 non-whitespace chars?}
+    T1 --> C{Output < BLANK_THRESHOLD non-whitespace chars?}
     C -->|No| P[Place markdown output]
     C -->|Yes| T2[Tier 2: Apple Vision OCR]
     T2 --> P
@@ -24,7 +24,7 @@ flowchart TD
     T3 -->|Failure| F[Hard failure: no output placed]
 ```
 
-**Tier 2 trigger condition:** `is_blank_output()` checks whether `$tmp` contains fewer than 50 non-whitespace characters after Tier 1 runs. Tier 2 then runs only for supported OCR input types: PDF, JPEG, PNG, GIF, TIFF, HEIC, WebP, and BMP. This catches empty image/PDF outputs without truncating minimal-but-valid Tier 1 output for unsupported formats such as EPUB.
+**Tier 2 trigger condition:** `is_blank_output()` checks whether `$tmp` contains fewer than `BLANK_THRESHOLD` (50) non-whitespace characters after Tier 1 runs. The threshold is defined as a named constant in `convert.sh`; update the boundary unit tests in `tests/run_tests.sh` if it ever changes. Tier 2 runs only for supported OCR input types: PDF, JPEG, PNG, GIF, TIFF, HEIC, WebP, and BMP. This catches empty image/PDF outputs without truncating minimal-but-valid Tier 1 output for unsupported formats such as EPUB.
 
 **Tier 3 trigger condition:** `--llm` or the "Convert to Markdown (AI)" Quick Action. Tier 3 file conversion runs directly against the source file; it does not require Tier 1 to succeed first.
 
@@ -118,7 +118,9 @@ Quick Action → Automator bootstrap (document.wflow COMMAND_STRING)
 ## Data Flow: LLM Conversion (Tier 3)
 
 ```bash
-llm_convert.py --provider openai|anthropic --api-key KEY input output
+MARKITDOWN_API_KEY=<key> llm_convert.py --provider openai|anthropic input output
+# API key is passed via environment variable, not CLI argument, to avoid
+# transient process-listing exposure.
     ├─ PDF → pymupdf renders pages to PNG bytes at 150 DPI
     │        → vision API per page (PDF_PROMPT)
     │        → pages joined with "\n\n---\n\n"
@@ -137,8 +139,8 @@ llm_convert.py --provider openai|anthropic --api-key KEY input output
 | Backup on overwrite | Existing `output.md` → `output.bak.md` (then `.bak1.md`, etc.) |
 | In-run collision tracking | Two inputs with same stem get `report.md` + `report-2.md` |
 | Signal handling | `trap cleanup EXIT` + `trap 'exit 130' INT` + `trap 'exit 143' TERM` |
-| Blank detection threshold | < 50 non-whitespace chars in Tier 1 output triggers Tier 2 |
-| --llm flag | `--llm [auto\|openai\|anthropic]` — must precede file arguments |
+| Blank detection threshold | `BLANK_THRESHOLD=50` non-whitespace chars; defined as a named constant in `convert.sh` |
+| --llm flag | `--llm [auto\|openai\|anthropic]` — must precede file arguments; invalid mode exits 1 with an error message |
 
 ---
 
