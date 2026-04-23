@@ -57,7 +57,8 @@
 				<key>ActionParameters</key>
 				<dict>
 					<key>COMMAND_STRING</key>
-					<string>export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
+						<string>set -euo pipefail
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 SCRIPT="$HOME/.markitdown-automator/scripts/convert.sh"
 if [ ! -f "$SCRIPT" ]; then
     osascript -e 'display notification "convert.sh not found. Please run setup.sh." with title "MarkItDown Error"'

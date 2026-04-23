@@ -65,6 +65,8 @@ If no new rule is detected → do not update the file.
 - This is a macOS environment.
 - Use macOS-compatible commands (e.g., `mktemp -t prefix` not `mktemp prefix.XXXXXX`, `open` not `xdg-open`).
 - Be aware of Xcode toolchain, codesigning, and Apple framework constraints.
+- Installer dependency checks must handle missing Homebrew/Python/Xcode tools explicitly. Before any install step that may prompt for a sudo password, explain exactly what will be installed, why sudo may be requested, and that the password is handled by macOS/sudo and is not saved by this project.
+- Uninstall flows must default to keeping shared dependencies such as Homebrew and Python. If offering to remove them, explain the shared-system impact and require an explicit yes before any removal.
 
 ### Commands
 
@@ -127,7 +129,7 @@ Project skills live in `.claude/commands/`. Invoke with `/skill-name`.
 - Single source of truth (no duplication):
   - each important fact lives in exactly one canonical place; other docs link, not copy
   - `docs/Architecture.md` is navigational; detailed behavior belongs in `docs/Features/`; decisions in `docs/ADR/`
-- When creating docs from templates: copy to real location, replace all placeholders, remove all template notes — committed docs must be clean (no `TEMPLATE ONLY`, `TODO:`, `...`)
+- When creating docs from templates: copy to real location, replace all placeholders, remove all template-only notes — committed docs must be clean (no placeholder todos or ellipses)
 - Update feature docs when behavior changes; update ADRs when architecture changes
 - Diagrams are mandatory in feature and ADR docs — use Mermaid; prefer `flowchart` / `sequenceDiagram`; ensure they render
 
@@ -236,13 +238,13 @@ Every file goes through up to three tiers. Stops when a tier produces content (�
 
 | Tier | Trigger | Method | Failure mode |
 | --- | --- | --- | --- |
-| 1 | Always | `markitdown "$input" -o "$tmp"` | Hard — counted as failure |
+| 1 | Normal file/URL action | `markitdown "$input" -o "$tmp"` | Hard — counted as failure |
 | 2 | Auto — Tier 1 output blank | `vision_ocr "$input" > "$tmp"` | Soft — blank `.md` placed, warning logged |
 | 3 | Explicit `--llm` flag | `python llm_convert.py --provider ...` | Hard — no output placed, user notified |
 
 **Supported file types for Tiers 2 & 3:** PDF (all pages), JPEG, PNG, GIF (first frame), TIFF, HEIC, WebP, BMP
 
-**Tier 3 is never automatic.** It is triggered only by the "Convert to Markdown (AI)" Quick Action or the `--llm` flag. URL inputs only use Tier 1.
+**Tier 3 is never automatic.** It is triggered only by the "Convert to Markdown (AI)" Quick Action or the `--llm` flag. File inputs go directly to Tier 3 when `--llm` is set; they do not require Tier 1 to succeed first. URL inputs only use Tier 1.
 
 ### File Layout
 
@@ -269,7 +271,7 @@ TASKS.md                              → backlog
 ### Runtime Install Locations (created by setup.sh)
 
 ```bash
-~/.markitdown-venv/                   → Python venv (markitdown[all], pymupdf, anthropic)
+~/.markitdown-venv/                   → Python venv (markitdown[all], pymupdf, Pillow, openai, anthropic)
 ~/.markitdown-automator/
   scripts/convert.sh                  → installed copy (what workflows call)
   scripts/vision_ocr                  → compiled Swift binary (Tier 2)
@@ -281,23 +283,27 @@ TASKS.md                              → backlog
 
 ### convert.sh Key Behaviors
 
-- **`--llm` flag**: `convert.sh --llm [auto|openai|anthropic] file ...` — must precede file args; triggers Tier 3 and skips blank-detection
-- **Blank detection**: after Tier 1, checks for < 50 non-whitespace chars → triggers Tier 2 automatically
+- **`--llm` flag**: `convert.sh --llm [auto|openai|anthropic] file ...` — must precede file args; triggers Tier 3 directly and skips Tier 1/blank-detection for files
+- **Blank detection**: after Tier 1, checks for < 50 non-whitespace chars → triggers Tier 2 automatically only for OCR-supported PDFs/images
 - **Temp-first writes**: converts to `mktemp`, moves into place only on success
 - **Backup on overwrite**: existing `output.md` → `output.bak.md` (then `.bak1.md`, etc.)
 - **In-run collision tracking**: two inputs with the same stem get `report.md` and `report-2.md`
 - **Signal handling**: `trap cleanup EXIT` + `trap 'exit 130' INT` + `trap 'exit 143' TERM`
-- **Tier 3 failure = hard**: no output placed, counted as failure, user notified via AppleScript
+- **Tier 3 failure = hard**: no output placed, existing `.md` not modified, counted as failure, user notified via AppleScript
 - **Tier 2 failure = soft**: blank `.md` placed, WARN logged — same as pre-OCR behaviour
 
 ### setup.sh Key Behaviors
 
+- `--help` prints setup modes, dependency behavior, admin-password handling, install locations, Keychain services, restart guidance, and log location without changing files.
+- Checks required macOS tools (`plutil`, `security`, `osascript`, `sw_vers`) before installing.
+- Checks Python 3.10+ first; if missing/outdated, checks Homebrew, offers to install Homebrew if needed, then offers to install/upgrade Python through Homebrew.
+- Before any dependency installation step that may request an administrator password, explains what will run, why it is needed, and that macOS/sudo handles the password without this project saving it.
 - Validates existing venv meets Python 3.10+; recreates if broken or outdated
 - Compiles `vision_ocr.swift` → `~/.markitdown-automator/scripts/vision_ocr` (macOS 11+ only; non-fatal if swiftc fails)
 - Workflow install is atomic: copy → temp sibling, move old → backup, move new → live, delete backup; restores previous install if any step fails
 - `plutil -lint` validates both `document.wflow` and `Info.plist` before touching the live install — will `exit 1` on invalid plist
-- `--configure-keys`: prompts for OpenAI/Anthropic keys (silent `read -rs`), stores in Keychain, installs `pymupdf`/`anthropic` packages, writes `PREFERRED_LLM_PROVIDER` to config
-- `--uninstall`: prompts before removing Keychain entries
+- `--configure-keys`: prompts for OpenAI/Anthropic keys (silent `read -rs`), stores in Keychain, installs `pymupdf`/`Pillow` plus configured provider SDKs, writes `PREFERRED_LLM_PROVIDER` to config
+- `--uninstall`: removes project files, workflows, venv, and logs; prompts before removing Keychain entries; defaults to keeping shared dependencies such as Homebrew and Python unless the user explicitly opts in
 - To pin markitdown version: change `MARKITDOWN_PKG` in `setup.sh` (line ~102), e.g. `markitdown[all]==0.1.1`
 
 ### API Key Management
@@ -323,6 +329,7 @@ Preferred provider (when both set): `~/.markitdown-automator/config` → `PREFER
 - `inputMethod: 1` in `ActionParameters` — files passed as shell arguments; `0` = via stdin
 - `Contents/Info.plist` must declare `NSServices` — without it macOS silently ignores the workflow
 - `serviceApplicationBundleID: com.apple.Safari` (capital S) for Safari; `com.apple.finder` (lowercase f) for Finder
+- The "Convert URL to Markdown" workflow must include Automator action categories `AMCategoryText` and `AMCategoryInternet` so it appears under Text and Internet service categories.
 - Always run `plutil -lint` after editing any plist; `setup.sh` will refuse to install an invalid bundle
 - After editing a workflow bundle, re-run `setup.sh` to push it to `~/Library/Services/`
 

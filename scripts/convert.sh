@@ -54,9 +54,10 @@ record_output() {
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-# Retrieve an API key from macOS Keychain; returns empty string if not set
+# Retrieve an API key from macOS Keychain; returns empty string if not set.
+# MARKITDOWN_SECURITY_CMD overrides the 'security' binary path for testing.
 get_keychain_key() {
-    security find-generic-password -s "$1" -a api-key -w 2>/dev/null || true
+    ${MARKITDOWN_SECURITY_CMD:-security} find-generic-password -s "$1" -a api-key -w 2>/dev/null || true
 }
 
 # Resolve which LLM provider to use for a given mode (auto|openai|anthropic).
@@ -110,6 +111,16 @@ is_blank_output() {
     local count
     count=$(awk '{gsub(/[[:space:]]/, ""); sum += length($0)} END {print sum+0}' "$f")
     [ "$count" -lt 50 ]
+}
+
+is_vision_ocr_supported() {
+    local input="$1" ext
+    ext="${input##*.}"
+    ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+    case "$ext" in
+        pdf|jpg|jpeg|png|gif|tiff|tif|heic|heif|webp|bmp) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Run Apple Vision OCR (Tier 2) on a file, writing recognized text to $2.
@@ -210,20 +221,28 @@ unique_backup() {
     printf '%s\n' "$candidate"
 }
 
-# ── locate markitdown ─────────────────────────────────────────────────────────
+# ── locate markitdown lazily ──────────────────────────────────────────────────
 
-if [ -x "$VENV/bin/markitdown" ]; then
-    MARKITDOWN="$VENV/bin/markitdown"
-else
-    MARKITDOWN=$(command -v markitdown 2>/dev/null || true)
-fi
+MARKITDOWN=""
+ensure_markitdown() {
+    if [ -n "$MARKITDOWN" ]; then
+        return 0
+    fi
 
-if [ -z "$MARKITDOWN" ]; then
-    msg="markitdown not found. Run setup.sh to install it."
-    log "ERROR: $msg"
-    notify "$msg"
-    exit 1
-fi
+    if [ -x "$VENV/bin/markitdown" ]; then
+        MARKITDOWN="$VENV/bin/markitdown"
+    else
+        MARKITDOWN=$(command -v markitdown 2>/dev/null || true)
+    fi
+
+    if [ -z "$MARKITDOWN" ]; then
+        local msg="markitdown not found. Run setup.sh to install it."
+        log "ERROR: $msg"
+        notify "$msg"
+        return 1
+    fi
+    return 0
+}
 
 # ── parse --llm flag ──────────────────────────────────────────────────────────
 # Optional: --llm [auto|openai|anthropic]
@@ -283,6 +302,10 @@ for input in "$@"; do
         _tmpfiles+=("$tmp")
         log "Converting URL: $input → $output"
 
+        if ! ensure_markitdown; then
+            ((fail++)) || true
+            continue
+        fi
         if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
             if ! mv "$tmp" "$output" 2>>"$LOG"; then
                 log "ERROR: mv failed placing URL output at $output"
@@ -332,51 +355,59 @@ for input in "$@"; do
         _tmpfiles+=("$tmp")
         log "Converting file: $input → $output"
 
-        if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
-
-            # ── Tier 3: LLM (when explicitly requested via --llm flag) ────────
-            # Overrides the Tier 1 output entirely; blank-detection is skipped.
-            if [ -n "$LLM_MODE" ]; then
-                if ! run_llm_convert "$input" "$tmp"; then
-                    log "FAILED (LLM Tier 3): $input"
-                    ((fail++)) || true
-                    continue
-                fi
-
-            # ── Tier 2: Vision OCR (auto, when Tier 1 output is blank) ───────
-            # Applies to PDFs, images, and any file markitdown can't extract
-            # text from. A blank .md is placed (not a failure) if OCR also fails.
-            elif is_blank_output "$tmp"; then
-                log "Tier 1 output blank for $input — trying Tier 2 Vision OCR"
-                run_vision_ocr "$input" "$tmp" || log "WARN: Tier 2 failed — output may be blank"
-            fi
-
-            # ── Place output (backup existing, then mv temp into place) ───────
-            # Backup any pre-existing output only after conversion succeeds,
-            # so a failed conversion never destroys the user's existing file.
-            if [ -f "$output" ]; then
-                backup=$(unique_backup "$output")
-                log "WARN: $output exists — backing up to $backup"
-                if ! mv "$output" "$backup" 2>>"$LOG"; then
-                    log "ERROR: mv failed backing up $output to $backup"
-                    notify "Backup failed for $(basename "$output") — file was not modified"
-                    ((fail++)) || true
-                    continue
-                fi
-            fi
-            if ! mv "$tmp" "$output" 2>>"$LOG"; then
-                log "ERROR: mv failed placing output at $output"
-                notify "File placement failed for $(basename "$output") — check logs"
+        # ── Tier 3: LLM (when explicitly requested via --llm flag) ────────────
+        # Runs directly on the source file. Explicit AI conversion must not be
+        # blocked by Tier 1 failing to understand the input format.
+        if [ -n "$LLM_MODE" ]; then
+            if ! run_llm_convert "$input" "$tmp"; then
+                log "FAILED (LLM Tier 3): $input"
                 ((fail++)) || true
                 continue
             fi
-            record_output "$output"
-            log "OK: $output"
-            ((success++)) || true
+
         else
-            log "FAILED: $input"
-            ((fail++)) || true
+            if ! ensure_markitdown; then
+                ((fail++)) || true
+                continue
+            fi
+
+            if "$MARKITDOWN" "$input" -o "$tmp" 2>>"$LOG"; then
+                # ── Tier 2: Vision OCR (auto, when Tier 1 output is blank) ───
+                # Applies only to OCR-supported PDFs/images. A blank .md is
+                # placed (not a failure) if OCR fails for a supported type.
+                if is_blank_output "$tmp" && is_vision_ocr_supported "$input"; then
+                    log "Tier 1 output blank for $input — trying Tier 2 Vision OCR"
+                    run_vision_ocr "$input" "$tmp" || log "WARN: Tier 2 failed — output may be blank"
+                fi
+            else
+                log "FAILED: $input"
+                ((fail++)) || true
+                continue
+            fi
         fi
+
+        # ── Place output (backup existing, then mv temp into place) ───────────
+        # Backup any pre-existing output only after conversion succeeds,
+        # so a failed conversion never destroys the user's existing file.
+        if [ -f "$output" ]; then
+            backup=$(unique_backup "$output")
+            log "WARN: $output exists — backing up to $backup"
+            if ! mv "$output" "$backup" 2>>"$LOG"; then
+                log "ERROR: mv failed backing up $output to $backup"
+                notify "Backup failed for $(basename "$output") — file was not modified"
+                ((fail++)) || true
+                continue
+            fi
+        fi
+        if ! mv "$tmp" "$output" 2>>"$LOG"; then
+            log "ERROR: mv failed placing output at $output"
+            notify "File placement failed for $(basename "$output") — check logs"
+            ((fail++)) || true
+            continue
+        fi
+        record_output "$output"
+        log "OK: $output"
+        ((success++)) || true
 
     # ── unrecognized ─────────────────────────────────────────────────────────
     else

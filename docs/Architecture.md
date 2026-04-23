@@ -10,32 +10,25 @@ markitdown-automator is a macOS shell-script tool that wraps Microsoft's `markit
 
 Every file conversion goes through up to three tiers, stopping as soon as a tier produces substantive output.
 
-```text
-User triggers Quick Action
-        │
-        ▼
-  ┌─────────────┐
-  │   Tier 1    │  markitdown "$input" -o "$tmp"
-  │  (always)   │  Fast. Handles text PDFs, DOCX, EPUB, HTML, etc.
-  └──────┬──────┘
-         │
-         ▼ output < 50 non-whitespace chars?
-  ┌─────────────┐
-  │   Tier 2    │  vision_ocr "$input" > "$tmp"       (auto, silent)
-  │  (Vision)   │  Apple Vision OCR via VNRecognizeTextRequest.
-  └──────┬──────┘  Handles: PDF (all pages), JPEG, PNG, GIF (frame 0),
-         │         TIFF, HEIC, WebP, BMP. Local, private, no cost.
-         │
-  ┌─────────────┐
-  │   Tier 3    │  python llm_convert.py --provider ... "$input" "$tmp"
-  │   (LLM)     │  OpenAI gpt-4o or Anthropic claude-sonnet-4-6.
-  └─────────────┘  Triggered only by "Convert to Markdown (AI)" Quick
-                   Action (--llm flag) — never runs automatically.
+```mermaid
+flowchart TD
+    A[User triggers Quick Action or convert.sh] --> B{Input}
+    B -->|URL| U[Tier 1: markitdown URL conversion]
+    B -->|File, normal action| T1[Tier 1: markitdown file conversion]
+    T1 --> C{Output has fewer than 50 non-whitespace chars?}
+    C -->|No| P[Place markdown output]
+    C -->|Yes| T2[Tier 2: Apple Vision OCR]
+    T2 --> P
+    B -->|File, AI action or --llm| T3[Tier 3: llm_convert.py]
+    T3 --> P
+    T3 -->|Failure| F[Hard failure: no output placed]
 ```
 
-**Tier 2 trigger condition:** `is_blank_output()` checks whether `$tmp` contains fewer than 50 non-whitespace characters after Tier 1 runs. This catches empty files, files with only `![]()`, and minimal EXIF metadata — without false-positiving on real content.
+**Tier 2 trigger condition:** `is_blank_output()` checks whether `$tmp` contains fewer than 50 non-whitespace characters after Tier 1 runs. Tier 2 then runs only for supported OCR input types: PDF, JPEG, PNG, GIF, TIFF, HEIC, WebP, and BMP. This catches empty image/PDF outputs without truncating minimal-but-valid Tier 1 output for unsupported formats such as EPUB.
 
-**Tier 3 failure semantics:** Hard failure — the file is counted as failed and no output is placed. Placing blank LLM output is worse than a notification.
+**Tier 3 trigger condition:** `--llm` or the "Convert to Markdown (AI)" Quick Action. Tier 3 file conversion runs directly against the source file; it does not require Tier 1 to succeed first.
+
+**Tier 3 failure semantics:** Hard failure — the file is counted as failed and no output is placed. Existing `.md` output is not backed up or modified after a Tier 3 failure.
 
 **Tier 2 failure semantics:** Soft failure — a blank `.md` is placed (same as today's markitdown behavior pre-patch). A WARN is logged.
 
@@ -57,6 +50,7 @@ workflows/
   Convert to Markdown (AI).workflow → Finder Quick Action (files, Tier 3 explicit)
 docs/
   Architecture.md                 → this file
+  Features/                       → behaviour specs and implementation plans
 tests/
   run_tests.sh                    → test suite
   test_files/                     → fixture files for tests
@@ -73,7 +67,7 @@ tests/
 ### Runtime install locations (created by setup.sh)
 
 ```bash
-~/.markitdown-venv/               → Python venv with markitdown[all], pymupdf, anthropic
+~/.markitdown-venv/               → Python venv with markitdown[all], pymupdf, Pillow, openai, anthropic
 ~/.markitdown-automator/
   scripts/
     convert.sh                    → installed copy (what workflows actually call)
@@ -87,6 +81,23 @@ tests/
 ~/Library/Logs/markitdown-automator.log
 ```
 
+### Installer dependency bootstrap
+
+`setup.sh` checks dependencies before installing project files:
+
+- Required macOS commands: `plutil`, `security`, `osascript`, `sw_vers`
+- Required runtime: Python 3.10+
+- Optional bootstrap: Homebrew, used only when Python 3.10+ is missing or too old
+- Optional OCR toolchain: Xcode Command Line Tools (`swiftc`, `xcrun`, SDK path)
+
+Before running a dependency installer that may request an administrator password, `setup.sh` prints what will be installed, why it is needed, and that password entry is handled by macOS/sudo and is not saved by this project.
+
+If Xcode Command Line Tools are missing, setup can open Apple's installer and then continues without Tier 2 OCR until setup is rerun after the tools finish installing.
+
+`bash setup.sh --help` is read-only and prints supported modes, dependency behavior, admin-password handling, install locations, Keychain services, restart guidance, and log location without running dependency checks or changing files.
+
+`bash setup.sh --uninstall` removes project-owned files, workflows, the project venv, and `~/Library/Logs/markitdown-automator.log`. It prompts before removing Keychain API keys. Shared dependencies such as Homebrew and Homebrew-installed Python are kept by default and require explicit opt-in removal; Xcode Command Line Tools are not removed by the script.
+
 ---
 
 ## Data Flow: File Conversion
@@ -96,9 +107,9 @@ Quick Action → Automator bootstrap (document.wflow COMMAND_STRING)
     → bash ~/.markitdown-automator/scripts/convert.sh [--llm auto] "$@"
         → for each input file:
             mktemp $dir/.markitdown-tmp-XXXXXX → $tmp
-            markitdown "$input" -o "$tmp"
-            if --llm: python llm_convert.py → overwrites $tmp
-            elif blank: vision_ocr "$input" > $tmp
+            if --llm: python llm_convert.py "$input" "$tmp"
+            else: markitdown "$input" -o "$tmp"
+            if not --llm and blank: vision_ocr "$input" > $tmp
             backup existing output.md → output.bak.md (if needed)
             mv $tmp → output.md
         → osascript notification (success count / failure count)
@@ -156,8 +167,9 @@ Retrieve (runtime): `security find-generic-password -s markitdown-openai -a api-
 - `serviceInputTypeIdentifier: com.apple.Automator.url` — accepts URLs (Safari Services)
 - `inputMethod: 1` — files passed as shell arguments; `0` = via stdin
 - `Contents/Info.plist` must declare `NSServices` — without it macOS silently ignores it
-- `serviceApplicationBundleID: com.apple.finder` (capital F) for Finder workflows
+- `serviceApplicationBundleID: com.apple.finder` (lowercase f) for Finder workflows
 - `serviceApplicationBundleID: com.apple.Safari` (capital S) for Safari workflows
+- `Convert URL to Markdown.workflow` action categories are `AMCategoryText` and `AMCategoryInternet`
 
 After editing a workflow bundle, re-run `setup.sh` to push it to `~/Library/Services/`.
 
@@ -182,9 +194,17 @@ Compiled from `scripts/vision_ocr.swift` during `setup.sh`. Requires macOS 11+.
 To support a new input format in the pipeline:
 
 1. **Tier 1** — markitdown handles it natively: nothing to do.
-2. **Tier 2** — add the extension to the `switch` in `vision_ocr.swift`, recompile via `setup.sh`.
+2. **Tier 2** — add the extension to `is_vision_ocr_supported()` in `convert.sh` and the supported input handling in `vision_ocr.swift`, then recompile via `setup.sh`.
 3. **Tier 3** — add the extension to `IMAGE_EXTS` in `llm_convert.py`; add PIL conversion logic if the format isn't natively supported by OpenAI/Anthropic APIs.
-4. Update the supported types list in `CLAUDE.md` and this file.
+4. Update the canonical supported-types docs in `AGENTS.md`, this file, and any affected feature doc.
+
+---
+
+## Feature Docs
+
+- [AI Conversion Path](Features/ai-conversion-path.md) — explicit Tier 3 flow and missing-key failure behaviour.
+- [Installer Dependency Bootstrap](Features/installer-dependency-bootstrap.md) — Homebrew/Python/Xcode dependency checks and admin-password disclosure.
+- [Workflow Bundles](Features/workflow-bundles.md) — Finder/Safari Automator entry points, embedded shell snippets, and workflow validation.
 
 ---
 

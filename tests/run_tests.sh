@@ -76,6 +76,27 @@ assert_has_content() {
     fi
 }
 
+run_convert_success() {
+    local desc="$1"; shift
+    if bash "$CONVERT" "$@" 2>/dev/null; then
+        return 0
+    fi
+    fail "$desc — convert.sh exited non-zero"
+    return 1
+}
+
+run_convert_failure() {
+    local desc="$1"; shift
+    local rc=0
+    bash "$CONVERT" "$@" 2>/dev/null || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "$desc"
+        return 0
+    fi
+    fail "$desc — convert.sh exited zero unexpectedly"
+    return 1
+}
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 TMPDIR_TEST=$(mktemp -d /tmp/markitdown-test-XXXXXX)
@@ -101,6 +122,16 @@ _is_blank() {
     local count
     count=$(awk '{gsub(/[[:space:]]/, ""); sum+=length($0)} END{print sum+0}' "$f")
     [ "$count" -lt 50 ]
+}
+
+_is_vision_ocr_supported() {
+    local input="$1" ext
+    ext="${input##*.}"
+    ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+    case "$ext" in
+        pdf|jpg|jpeg|png|gif|tiff|tif|heic|heif|webp|bmp) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Empty file → blank
@@ -133,7 +164,127 @@ real_file="$TMPDIR_TEST/real.md"
 printf '# Hello\n\nThis is a real document with enough content to pass the threshold.\n' > "$real_file"
 assert_false "real content is not blank" _is_blank "$real_file"
 
+assert "PDF is eligible for Vision OCR fallback" _is_vision_ocr_supported "scan.PDF"
+assert "JPEG is eligible for Vision OCR fallback" _is_vision_ocr_supported "photo.jpeg"
+assert_false "EPUB is not eligible for Vision OCR fallback" _is_vision_ocr_supported "book.epub"
+assert_false "DOCX is not eligible for Vision OCR fallback" _is_vision_ocr_supported "report.docx"
+
 fi  # units
+
+# ── Unit tests: setup.sh dependency helpers ───────────────────────────────────
+
+if [[ "$RUN_FILTER" == "all" || "$RUN_FILTER" == "--units" ]]; then
+header "Unit: setup.sh dependency helpers"
+
+# Mirrors setup.sh. Keep this inline; do not source setup.sh because it performs
+# install-time side effects.
+python_meets_minimum() {
+    local version="$1" major minor
+    case "$version" in
+        *[!0-9.]*|""|.*|*.) return 1 ;;
+    esac
+    major=$(printf '%s' "$version" | cut -d. -f1)
+    minor=$(printf '%s' "$version" | cut -d. -f2)
+    [ -n "$major" ] || return 1
+    [ -n "$minor" ] || minor=0
+    [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }
+}
+
+assert_false "Python 3.9 is below minimum" python_meets_minimum "3.9"
+assert "Python 3.10 meets minimum" python_meets_minimum "3.10"
+assert "Python 3.14 meets minimum" python_meets_minimum "3.14"
+assert "Python 4.0 meets minimum" python_meets_minimum "4.0"
+assert_false "malformed Python version is rejected" python_meets_minimum "not-a-version"
+assert_false "empty Python version is rejected" python_meets_minimum ""
+
+help_out="$TMPDIR_TEST/setup-help.txt"
+if bash setup.sh --help > "$help_out" 2>/dev/null; then
+    pass "setup.sh --help exits zero"
+else
+    fail "setup.sh --help exits zero"
+fi
+assert "setup.sh --help documents Homebrew" grep -q "Homebrew" "$help_out"
+assert "setup.sh --help documents admin password handling" grep -q "macOS/sudo" "$help_out"
+assert "setup.sh --help documents password is not saved" grep -q "stores, logs, or forwards" "$help_out"
+assert "setup.sh --help documents configure-keys" grep -q -- "--configure-keys" "$help_out"
+assert "setup.sh --help documents uninstall log cleanup" grep -q "markitdown-automator.log" "$help_out"
+assert "setup.sh --help documents shared dependency defaults" grep -q "Homebrew and Python are shared dependencies and are kept by default" "$help_out"
+assert "setup.sh --help documents Enter keeps dependencies" grep -q "Press ENTER to keep them" "$help_out"
+
+fi  # setup dependency helpers
+
+# ── Unit tests: workflow bundle metadata ──────────────────────────────────────
+
+if [[ "$RUN_FILTER" == "all" || "$RUN_FILTER" == "--units" ]]; then
+header "Unit: workflow bundles"
+
+workflow_plists_valid() {
+    local wf="$1"
+    plutil -lint "$wf/Contents/document.wflow" >/dev/null &&
+        plutil -lint "$wf/Contents/Info.plist" >/dev/null
+}
+
+workflow_shell_valid() {
+    local wf="$1" tmp
+    tmp=$(mktemp /tmp/workflow-cmd-XXXXXX)
+    /usr/libexec/PlistBuddy \
+        -c 'Print :actions:0:action:ActionParameters:COMMAND_STRING' \
+        "$wf/Contents/document.wflow" > "$tmp"
+    if bash -n "$tmp"; then
+        rm -f "$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+workflow_value_is() {
+    local wf="$1" key_path="$2" expected="$3" actual
+    actual=$(/usr/libexec/PlistBuddy -c "Print $key_path" "$wf/Contents/document.wflow" 2>/dev/null)
+    [ "$actual" = "$expected" ]
+}
+
+workflow_category_is() {
+    local wf="$1" index="$2" expected="$3" actual
+    actual=$(/usr/libexec/PlistBuddy \
+        -c "Print :actions:0:action:Category:$index" \
+        "$wf/Contents/document.wflow" 2>/dev/null)
+    [ "$actual" = "$expected" ]
+}
+
+assert "standard file workflow plists are valid" workflow_plists_valid "workflows/Convert to Markdown.workflow"
+assert "AI file workflow plists are valid" workflow_plists_valid "workflows/Convert to Markdown (AI).workflow"
+assert "URL workflow plists are valid" workflow_plists_valid "workflows/Convert URL to Markdown.workflow"
+
+assert "standard file workflow embedded shell is valid" workflow_shell_valid "workflows/Convert to Markdown.workflow"
+assert "AI file workflow embedded shell is valid" workflow_shell_valid "workflows/Convert to Markdown (AI).workflow"
+assert "URL workflow embedded shell is valid" workflow_shell_valid "workflows/Convert URL to Markdown.workflow"
+
+assert "standard file workflow passes input as arguments" workflow_value_is \
+    "workflows/Convert to Markdown.workflow" \
+    ":actions:0:action:ActionParameters:inputMethod" "1"
+assert "AI file workflow passes input as arguments" workflow_value_is \
+    "workflows/Convert to Markdown (AI).workflow" \
+    ":actions:0:action:ActionParameters:inputMethod" "1"
+assert "URL workflow reads input from stdin" workflow_value_is \
+    "workflows/Convert URL to Markdown.workflow" \
+    ":actions:0:action:ActionParameters:inputMethod" "0"
+
+assert "standard file workflow is Finder-scoped" workflow_value_is \
+    "workflows/Convert to Markdown.workflow" \
+    ":workflowMetaData:serviceApplicationBundleID" "com.apple.finder"
+assert "AI file workflow is Finder-scoped" workflow_value_is \
+    "workflows/Convert to Markdown (AI).workflow" \
+    ":workflowMetaData:serviceApplicationBundleID" "com.apple.finder"
+assert "URL workflow is Safari-scoped" workflow_value_is \
+    "workflows/Convert URL to Markdown.workflow" \
+    ":workflowMetaData:serviceApplicationBundleID" "com.apple.Safari"
+assert "URL workflow first Services category is Text" workflow_category_is \
+    "workflows/Convert URL to Markdown.workflow" "0" "AMCategoryText"
+assert "URL workflow second Services category is Internet" workflow_category_is \
+    "workflows/Convert URL to Markdown.workflow" "1" "AMCategoryInternet"
+
+fi  # workflow bundles
 
 # ── Tier 1 tests (requires markitdown in venv) ────────────────────────────────
 
@@ -159,7 +310,7 @@ else
 
         cp "$src" "$tmp_input"
         # Run convert.sh from the tmp dir context (output lands alongside input)
-        bash "$CONVERT" "$tmp_input" 2>/dev/null || true
+        run_convert_success "$desc" "$tmp_input"
         assert_has_content "$desc" "$expected_output" "$min_chars"
         rm -f "$expected_output" "$tmp_input"
     }
@@ -212,7 +363,7 @@ else
         if [ ! -x "$VENV/bin/markitdown" ]; then
             skipped "scan PDF Tier 2 trigger — markitdown not installed"
         else
-            bash "$CONVERT" "$scan_copy" 2>/dev/null || true
+            run_convert_success "image-only scan PDF → Tier 2 Vision OCR exits zero" "$scan_copy"
             assert_has_content "image-only scan PDF → Tier 2 Vision OCR produces content" "$scan_out"
             rm -f "$scan_copy" "$scan_out"
         fi
@@ -259,7 +410,7 @@ else
         cp "$docx_src" "$docx_copy"
         printf 'existing content\n' > "$out_md"
 
-        bash "$CONVERT" "$docx_copy" 2>/dev/null || true
+        run_convert_success "backup conversion" "$docx_copy"
 
         assert "existing .md backed up to .bak.md" test -f "$bak_md"
         assert "new .md was placed"                test -f "$out_md"
@@ -282,9 +433,43 @@ header "Unit: convert.sh invocation guards"
 assert "no-args exits non-zero" bash -c 'bash '"$CONVERT"' 2>/dev/null; [ $? -ne 0 ]'
 
 # Test: directory input counted as failure (exit 1), doesn't crash
-dir_result=0
-bash "$CONVERT" "$TMPDIR_TEST" 2>/dev/null || dir_result=$?
-assert "directory input exits non-zero" [ "$dir_result" -ne 0 ]
+run_convert_failure "directory input exits non-zero" "$TMPDIR_TEST"
+
+# Test: explicit AI conversion fails hard when no key is configured, without
+# invoking Tier 1 or moving the existing output aside.
+#
+# convert.sh prepends /usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin to PATH, so
+# a constrained PATH alone cannot prevent /usr/bin/security from being found.
+# MARKITDOWN_SECURITY_CMD lets us inject a stub that returns no key, making the
+# test hermetic regardless of what keys the developer has in their Keychain.
+ai_home="$TMPDIR_TEST/ai-home"
+ai_bin="$TMPDIR_TEST/ai-bin"
+ai_input="$TMPDIR_TEST/ai-input.png"
+ai_output="$TMPDIR_TEST/ai-input.md"
+ai_backup="$TMPDIR_TEST/ai-input.bak.md"
+ai_marker="$TMPDIR_TEST/markitdown-called"
+mkdir -p "$ai_home/.markitdown-automator/scripts" "$ai_home/.markitdown-venv/bin" "$ai_home/Downloads" "$ai_bin"
+printf 'not a real image, but LLM provider resolution should fail first\n' > "$ai_input"
+printf 'existing markdown\n' > "$ai_output"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ai_home/.markitdown-automator/scripts/llm_convert.py"
+chmod +x "$ai_home/.markitdown-automator/scripts/llm_convert.py"
+printf '#!/usr/bin/env bash\nprintf called > "$MARKITDOWN_AUDIT_MARKER"\nexit 77\n' > "$ai_bin/markitdown"
+chmod +x "$ai_bin/markitdown"
+cp "$ai_bin/markitdown" "$ai_home/.markitdown-venv/bin/markitdown"
+# Stub security to always return errSecItemNotFound (44) so key lookup is empty.
+printf '#!/usr/bin/env bash\nexit 44\n' > "$ai_bin/security"
+chmod +x "$ai_bin/security"
+
+ai_rc=0
+HOME="$ai_home" \
+PATH="$ai_bin" \
+MARKITDOWN_SECURITY_CMD="$ai_bin/security" \
+MARKITDOWN_AUDIT_MARKER="$ai_marker" \
+    /bin/bash "$CONVERT" --llm auto "$ai_input" 2>/dev/null || ai_rc=$?
+assert "AI no-key conversion exits non-zero" [ "$ai_rc" -ne 0 ]
+assert "AI no-key conversion leaves existing output in place" grep -q "existing markdown" "$ai_output"
+assert_false "AI no-key conversion does not back up existing output" test -f "$ai_backup"
+assert_false "AI no-key conversion does not invoke Tier 1" test -f "$ai_marker"
 
 fi  # unit edge cases
 
@@ -342,7 +527,7 @@ else
         spaces_out="$TMPDIR_TEST/my document with spaces.md"
 
         cp "$docx_src" "$spaces_copy"
-        bash "$CONVERT" "$spaces_copy" 2>/dev/null || true
+        run_convert_success "file with spaces in name" "$spaces_copy"
         assert_has_content "file with spaces in name → .md created" "$spaces_out"
 
         rm -f "$spaces_copy" "$spaces_out"
@@ -373,7 +558,7 @@ else
         cp "$docx_src" "$docx_copy"
         cp "$json_src"  "$json_copy"
 
-        bash "$CONVERT" "$docx_copy" "$json_copy" 2>/dev/null || true
+        run_convert_success "same-stem collision conversion" "$docx_copy" "$json_copy"
 
         assert "first same-stem input → test.md"   test -f "$out1"
         assert "second same-stem input → test-2.md" test -f "$out2"
@@ -404,14 +589,14 @@ else
         cp "$docx_src" "$docx_copy"
 
         # First run: creates bkp.md
-        bash "$CONVERT" "$docx_copy" 2>/dev/null || true
+        run_convert_success "multi-backup first conversion" "$docx_copy"
         assert "first run: bkp.md created" test -f "$out_md"
 
         # Manually place a pre-existing backup so next run must go to bak1.md
         printf 'first backup\n' > "$bak_md"
 
         # Second run: bak.md already exists → backup must use bak1.md
-        bash "$CONVERT" "$docx_copy" 2>/dev/null || true
+        run_convert_success "multi-backup second conversion" "$docx_copy"
         assert "second run: bkp.bak1.md created (bkp.bak.md already existed)" test -f "$bak1_md"
 
         rm -f "$docx_copy" "$out_md" "$bak_md" "$bak1_md"
@@ -450,7 +635,7 @@ else
         fi
 
         cp "$src" "$tmp_input"
-        bash "$CONVERT" "$tmp_input" 2>/dev/null || true
+        run_convert_success "$desc" "$tmp_input"
         assert_contains_key_lines "$desc" "$actual" "$expected"
         rm -f "$actual" "$tmp_input"
     }
