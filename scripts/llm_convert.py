@@ -37,7 +37,7 @@ if sys.version_info < (3, 10):
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 DPI = 150
-MAX_PAGES = 50   # cost/time cap for large PDFs
+MAX_PAGES = 50  # cost/time cap for large PDFs
 
 # Formats sent natively (no PIL conversion needed)
 NATIVE_FORMATS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -63,6 +63,7 @@ IMAGE_PROMPT = (
 
 
 # ── PDF rendering ─────────────────────────────────────────────────────────────
+
 
 def render_pdf_pages(pdf_path: str) -> list[bytes]:
     """Render each PDF page to PNG bytes at DPI resolution via pymupdf."""
@@ -94,6 +95,7 @@ def render_pdf_pages(pdf_path: str) -> list[bytes]:
 
 
 # ── Image loading ─────────────────────────────────────────────────────────────
+
 
 def load_image_bytes(image_path: str) -> tuple[bytes, str]:
     """
@@ -133,7 +135,10 @@ def load_image_bytes(image_path: str) -> tuple[bytes, str]:
 
 # ── OpenAI conversion ─────────────────────────────────────────────────────────
 
-def convert_openai(api_key: str, image_chunks: list[tuple[bytes, str]], prompt: str) -> str:
+
+def convert_openai(
+    api_key: str, image_chunks: list[tuple[bytes, str]], prompt: str
+) -> str:
     """Send image chunks to OpenAI gpt-4o vision, return concatenated markdown."""
     try:
         from openai import OpenAI
@@ -172,7 +177,10 @@ def convert_openai(api_key: str, image_chunks: list[tuple[bytes, str]], prompt: 
 
 # ── Anthropic conversion ──────────────────────────────────────────────────────
 
-def convert_anthropic(api_key: str, image_chunks: list[tuple[bytes, str]], prompt: str) -> str:
+
+def convert_anthropic(
+    api_key: str, image_chunks: list[tuple[bytes, str]], prompt: str
+) -> str:
     """Send image chunks to claude-sonnet-4-6 vision, return concatenated markdown."""
     try:
         import anthropic
@@ -214,8 +222,11 @@ def convert_anthropic(api_key: str, image_chunks: list[tuple[bytes, str]], promp
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LLM vision conversion for markitdown-automator")
+    parser = argparse.ArgumentParser(
+        description="LLM vision conversion for markitdown-automator"
+    )
     parser.add_argument("--provider", required=True, choices=["openai", "anthropic"])
     parser.add_argument("input_path")
     parser.add_argument("output_path")
@@ -241,7 +252,10 @@ def main() -> None:
             sys.exit(1)
         image_chunks = [(b, "image/png") for b in page_bytes]
         prompt = PDF_PROMPT
-        print(f"Converting {len(image_chunks)} page(s) via {args.provider}...", file=sys.stderr)
+        print(
+            f"Converting {len(image_chunks)} page(s) via {args.provider}...",
+            file=sys.stderr,
+        )
 
     elif ext in IMAGE_EXTS:
         img_bytes, media_type = load_image_bytes(args.input_path)

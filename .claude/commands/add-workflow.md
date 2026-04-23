@@ -23,10 +23,13 @@ cp -r "workflows/<template>.workflow" "workflows/$ARGUMENTS.workflow"
 ### 2. Generate fresh UUIDs
 
 Every workflow needs three unique UUIDs. Never reuse from another bundle.
+
 ```bash
 python3 -c "import uuid; [print(str(uuid.uuid4()).upper()) for _ in range(3)]"
 ```
+
 Replace in `document.wflow`:
+
 - `UUID` — the action UUID
 - `InputUUID` — connects to the input source
 - `OutputUUID` — connects to the output
@@ -34,6 +37,7 @@ Replace in `document.wflow`:
 ### 3. Edit `document.wflow`
 
 Key fields to update:
+
 - `COMMAND_STRING` — the shell command the workflow runs (use absolute path via `$SCRIPT` variable already in template)
 - `NSMenuItem → default` — must match the workflow name exactly
 - `serviceInputTypeIdentifier` — `com.apple.Automator.fileSystemObject` for files, `com.apple.Automator.url` for URLs
@@ -42,6 +46,7 @@ Key fields to update:
 ### 4. Edit `Info.plist`
 
 Key fields to update:
+
 - `CFBundleIdentifier` — must be unique across all workflows, e.g. `com.markitdown-automator.convert-batch`
 - `NSMenuItem → default` — must match `document.wflow` exactly
 - `NSApplicationIdentifier` inside `NSServices`:
@@ -50,15 +55,18 @@ Key fields to update:
 - `NSSendFileTypes` — keep `public.item` for broad file acceptance
 
 ### 5. Validate both files — REQUIRED before proceeding
+
 ```bash
 plutil -lint "workflows/$ARGUMENTS.workflow/Contents/document.wflow"
 plutil -lint "workflows/$ARGUMENTS.workflow/Contents/Info.plist"
 ```
+
 Fix any error before moving on. `setup.sh` will refuse to install an invalid bundle, but catch it here first.
 
 ### 6. Wire into setup.sh
 
 Add the workflow name to the `for workflow in` loop (around line 264):
+
 ```bash
 for workflow in \
     "Convert to Markdown.workflow" \
@@ -68,9 +76,11 @@ for workflow in \
 ```
 
 ### 7. Install and verify
+
 ```bash
 bash setup.sh
 ```
+
 Confirm the workflow appears in `~/Library/Services/`.
 
 Note: newly installed Quick Actions require a system restart to appear in Finder/Safari menus. `pbs -update` alone is not reliable.
@@ -78,6 +88,7 @@ Note: newly installed Quick Actions require a system restart to appear in Finder
 ### 8. Update documentation
 
 **`docs/Architecture.md`** — add to File Layout:
+
 ```text
 workflows/
   $ARGUMENTS.workflow    → description of what it does
